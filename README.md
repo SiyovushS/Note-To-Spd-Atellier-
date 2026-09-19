@@ -26,8 +26,8 @@ on the Supernote.
 Requires Node.js 20 or later.
 
 ```sh
-git clone https://github.com/YOUR-ACCOUNT/supernote-note-to-spd.git
-cd supernote-note-to-spd
+git clone https://github.com/SiyovushS/Note-To-Spd-Atellier-.git
+cd Note-To-Spd-Atellier-
 npm install
 npm run build
 node dist/src/cli.js "/path/to/notebook.note" "/path/to/output-folder"
