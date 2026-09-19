@@ -25,10 +25,13 @@ test('writes a SQLite Atelier file with readable tile and canvas metadata', asyn
     const spd = await SupernoteAtelier.open(bytes);
     assert.deepEqual(spd.canvasSize, { width: 129, height: 70 });
     assert.equal(spd.fmtVer, 2);
-    assert.equal(spd.surfaces.surface_1.length, 2);
-    const reconstructed = await spd.toImage('surface_1');
+    assert.equal(spd.surfaces.surface_1.length, 0);
+    assert.equal(spd.surfaces.surface_2.length, 3);
+    const firstTile = spd.surfaces.surface_2[0].bitmapBuffer;
+    assert.equal(firstTile[25], 4, 'tiles must use Manta-style greyscale+alpha PNG encoding');
+    const reconstructed = await spd.toImage('surface_2');
     assert.ok(reconstructed);
-    assert.equal(reconstructed.getPixel(128, 5)[0], 0);
+    assert.equal(reconstructed.getPixel(192, 5)[0], 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

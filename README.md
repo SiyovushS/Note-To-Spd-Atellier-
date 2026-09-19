@@ -16,10 +16,12 @@ meeting-notes.note  →  meeting-notes-page-1.spd
                        …
 ```
 
-The visual page content is retained, but the SPD result is flattened: it will
-not retain editable pen strokes, handwriting-recognition data, links, layers,
-or notebook page structure. Import/open the resulting `.spd` files in Atelier
-on the Supernote.
+The visual page content is retained as an Atelier **background layer**. The
+result opens as a drawing with a blank foreground layer, so you can add new
+pen strokes, layers, and other Atelier edits. The source notebook's existing
+strokes cannot remain individually editable: SPD stores raster image tiles,
+not Supernote notebook stroke data. Handwriting recognition, links, and
+notebook page structure are also not retained.
 
 ## Install and run
 
@@ -42,6 +44,14 @@ npx supernote-note-to-spd "/path/to/notebook.note" "/path/to/output-folder"
 If the output folder is omitted, converted drawings are placed next to the
 source notebook.
 
+For the closest device-specific output, use any small drawing you created and
+can open on your own Manta as a template:
+
+```sh
+node dist/src/cli.js "/path/to/notebook.note" "/path/to/output-folder" \
+  --template "/path/to/working-manta-drawing.spd"
+```
+
 ## Development checks
 
 ```sh
@@ -54,12 +64,11 @@ format library.
 
 ## Compatibility and status
 
-The writer follows the community-reverse-engineered Atelier schema (`config`,
-`surface_1`, PNG tiles, and the usual virtual-canvas tile coordinates). Ratta
-has not published an official writer specification, so keep the original note
-file and test a converted drawing on your device before relying on it for
-important work. The project intentionally writes simple, one-layer drawings to
-maximize compatibility.
+The writer follows a Manta device-created drawing: its three `surface_*` tables,
+greyscale PNG tile encoding, background-layer placement, virtual-canvas
+coordinates, JPEG thumbnail, and metadata. Ratta has not published an official
+writer specification, so keep the original note and test a converted drawing on
+your device before relying on it for important work.
 
 ## License
 

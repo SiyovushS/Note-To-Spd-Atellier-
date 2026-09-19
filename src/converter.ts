@@ -1,19 +1,24 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { Image, ImageColorModel, encodePng } from 'image-js';
+import { Image, ImageColorModel, encodeJpeg, encodePng } from 'image-js';
 import initSqlJs from 'sql.js';
 import { SupernoteX, toImage } from 'supernote-typescript';
 
 const TILE_SIZE = 128;
 // Atelier places normal documents near the center of its large virtual canvas.
 // These coordinates were reverse-engineered from device-created drawings.
-const FIRST_TILE_COLUMN = 1947;
-const FIRST_TILE_ROW = 1945;
+const FIRST_TILE_COLUMN = 1945;
+const FIRST_TILE_ROW = 1943;
 const TILE_ID_STRIDE = 4096;
+const HORIZONTAL_TILE_PADDING = 64;
 const LAYER_LIST = Uint8Array.from([
-  0x0a, 0x0b, 0x08, 0x02, 0x12, 0x07, 0x4c, 0x61, 0x79, 0x65, 0x72, 0x20, 0x31,
-  0x0a, 0x0e, 0x08, 0x01, 0x12, 0x0a, 0x42, 0x61, 0x63, 0x6b, 0x67, 0x72, 0x6f,
-  0x75, 0x6e, 0x64, 0x10, 0x02, 0x18, 0x02,
+  // The layer list observed in a drawing created on a Manta: a drawable
+  // foreground layer (surface_1), a background layer (surface_2), and a
+  // secondary empty layer (surface_0).
+  0x0a, 0x0b, 0x08, 0x01, 0x12, 0x07, 0x6c, 0x61, 0x79, 0x65, 0x72, 0x20, 0x31,
+  0x0a, 0x0e, 0x08, 0x02, 0x12, 0x0a, 0x62, 0x61, 0x63, 0x6b, 0x67, 0x72, 0x6f,
+  0x75, 0x6e, 0x64, 0x0a, 0x0b, 0x08, 0x00, 0x12, 0x07, 0x4c, 0x61, 0x79, 0x65,
+  0x72, 0x20, 0x30, 0x10, 0x03, 0x18, 0x01,
 ]);
 
 export interface ConversionResult {
@@ -28,7 +33,11 @@ export interface ConversionResult {
  * source pages: pen strokes, handwriting recognition, links, and note pages
  * cannot remain editable in the resulting drawing.
  */
-export async function convertNoteToSpd(inputPath: string, outputDirectory: string): Promise<ConversionResult> {
+export async function convertNoteToSpd(
+  inputPath: string,
+  outputDirectory: string,
+  templatePath?: string,
+): Promise<ConversionResult> {
   if (path.extname(inputPath).toLowerCase() !== '.note') {
     throw new Error(`Expected a .note file, received: ${inputPath}`);
   }
@@ -48,43 +57,50 @@ export async function convertNoteToSpd(inputPath: string, outputDirectory: strin
   const outputs: string[] = [];
   for (const [index, page] of pages.entries()) {
     const output = path.join(outputDirectory, `${stem}-page-${index + 1}.spd`);
-    await writeSpd(page, output);
+    await writeSpd(page, output, templatePath);
     outputs.push(output);
   }
   return { input: inputPath, outputs, pageCount: pages.length };
 }
 
-/** Write a single flattened RGBA image as a minimally valid Atelier database. */
-export async function writeSpd(source: Image, outputPath: string): Promise<void> {
+/**
+ * Write a flattened image as an Atelier drawing. The page is stored on the
+ * Manta's background surface, leaving its normal foreground layer empty and
+ * ready for new pen strokes in Atelier. Supplying a drawing made by the same
+ * device as `templatePath` additionally preserves its exact SQLite details.
+ */
+export async function writeSpd(source: Image, outputPath: string, templatePath?: string): Promise<void> {
   const canvas = flattenOntoWhite(source);
-  const paddedWidth = Math.ceil(canvas.width / TILE_SIZE) * TILE_SIZE;
+  const tileColumns = Math.ceil((canvas.width + 2 * HORIZONTAL_TILE_PADDING) / TILE_SIZE);
+  const tileRows = Math.ceil(canvas.height / TILE_SIZE);
   const paddedHeight = Math.ceil(canvas.height / TILE_SIZE) * TILE_SIZE;
   const SQL = await initSqlJs();
-  const db = new SQL.Database();
+  const db = templatePath ? new SQL.Database(await readFile(templatePath)) : new SQL.Database();
   try {
-    db.run(`
-      CREATE TABLE surface_1 (tid INTEGER NOT NULL PRIMARY KEY, tile BLOB NOT NULL) WITHOUT ROWID;
-      CREATE TABLE surface_2 (tid INTEGER NOT NULL PRIMARY KEY, tile BLOB NOT NULL) WITHOUT ROWID;
-      CREATE TABLE config (name TEXT PRIMARY KEY NOT NULL, value BLOB);
-    `);
+    ensureMantaSchema(db);
+    db.run('DELETE FROM surface_0; DELETE FROM surface_1; DELETE FROM surface_2;');
     const config: Array<[string, Uint8Array]> = [
       ['fmt_ver', utf8('2')],
       ['ls', LAYER_LIST],
-      ['thumbnail', new Uint8Array()],
-      ['vp.x', utf8(String(FIRST_TILE_COLUMN * TILE_SIZE))],
-      ['vp.y', utf8(String(FIRST_TILE_ROW * TILE_SIZE))],
-      ['vp.scale', utf8('1.0')],
+      ['thumbnail', createThumbnail(canvas)],
+      ['vp.x', utf8('249984.000000')],
+      ['vp.y', utf8('249984.000000')],
+      ['vp.scale', utf8('1.000000')],
       ['surface.width', utf8(String(canvas.width))],
       ['surface.height', utf8(String(canvas.height))],
-      ['frames', new Uint8Array()],
+      ['ppi', utf8('72')],
+      ['submit_count', utf8('1')],
     ];
-    for (const [name, value] of config) db.run('INSERT INTO config (name, value) VALUES (?, ?)', [name, value]);
+    for (const [name, value] of config) db.run('INSERT OR REPLACE INTO config (name, value) VALUES (?, ?)', [name, value]);
 
-    for (let row = 0; row < paddedHeight / TILE_SIZE; row++) {
-      for (let column = 0; column < paddedWidth / TILE_SIZE; column++) {
+    for (let row = 0; row < tileRows; row++) {
+      for (let column = 0; column < tileColumns; column++) {
         const tile = extractTile(canvas, column, row);
         const tid = (FIRST_TILE_COLUMN + column) * TILE_ID_STRIDE + FIRST_TILE_ROW + row;
-        db.run('INSERT INTO surface_1 (tid, tile) VALUES (?, ?)', [tid, encodePng(tile)]);
+        // Device-generated drawings use GREYA (PNG color type 4) tiles on the
+        // background surface. Keeping surface_1 empty makes the document
+        // immediately drawable in Atelier.
+        db.run('INSERT INTO surface_2 (tid, tile) VALUES (?, ?)', [tid, encodePng(tile.convertColor(ImageColorModel.GREYA))]);
       }
     }
     await mkdir(path.dirname(outputPath), { recursive: true });
@@ -116,7 +132,7 @@ function extractTile(source: Image, column: number, row: number): Image {
     const sourceY = row * TILE_SIZE + y;
     if (sourceY >= source.height) continue;
     for (let x = 0; x < TILE_SIZE; x++) {
-      const sourceX = column * TILE_SIZE + x;
+      const sourceX = column * TILE_SIZE + x - HORIZONTAL_TILE_PADDING;
       if (sourceX >= source.width) continue;
       const from = (sourceY * source.width + sourceX) * 4;
       const to = (y * TILE_SIZE + x) * 4;
@@ -124,6 +140,19 @@ function extractTile(source: Image, column: number, row: number): Image {
     }
   }
   return new Image(TILE_SIZE, TILE_SIZE, { colorModel: ImageColorModel.RGBA, data });
+}
+
+function createThumbnail(source: Image): Uint8Array {
+  return encodeJpeg(source.resize({ width: 600, height: 800, preserveAspectRatio: false }), { quality: 50 });
+}
+
+function ensureMantaSchema(db: { run(sql: string): void }): void {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS config(name TEXT PRIMARY KEY, value BLOB);
+    CREATE TABLE IF NOT EXISTS surface_0(tid INTEGER PRIMARY KEY, tile BLOB);
+    CREATE TABLE IF NOT EXISTS surface_1(tid INTEGER PRIMARY KEY, tile BLOB);
+    CREATE TABLE IF NOT EXISTS surface_2(tid INTEGER PRIMARY KEY, tile BLOB);
+  `);
 }
 
 function utf8(value: string): Uint8Array {
