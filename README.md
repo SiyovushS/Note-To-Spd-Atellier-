@@ -52,6 +52,11 @@ node dist/src/cli.js "/path/to/notebook.note" "/path/to/output-folder" \
   --template "/path/to/working-manta-drawing.spd"
 ```
 
+By default the converted page is kept on the background layer. To put its ink
+on Atelier's normal drawing layer (so pixel erasing and drawing happen on the
+same layer), add `--layer drawing`. This still cannot restore the individual
+notebook stroke events.
+
 ## Development checks
 
 ```sh

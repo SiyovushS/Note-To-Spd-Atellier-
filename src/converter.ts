@@ -37,6 +37,7 @@ export async function convertNoteToSpd(
   inputPath: string,
   outputDirectory: string,
   templatePath?: string,
+  targetLayer: 1 | 2 = 2,
 ): Promise<ConversionResult> {
   if (path.extname(inputPath).toLowerCase() !== '.note') {
     throw new Error(`Expected a .note file, received: ${inputPath}`);
@@ -57,7 +58,7 @@ export async function convertNoteToSpd(
   const outputs: string[] = [];
   for (const [index, page] of pages.entries()) {
     const output = path.join(outputDirectory, `${stem}-page-${index + 1}.spd`);
-    await writeSpd(page, output, templatePath);
+    await writeSpd(page, output, templatePath, targetLayer);
     outputs.push(output);
   }
   return { input: inputPath, outputs, pageCount: pages.length };
@@ -69,7 +70,12 @@ export async function convertNoteToSpd(
  * ready for new pen strokes in Atelier. Supplying a drawing made by the same
  * device as `templatePath` additionally preserves its exact SQLite details.
  */
-export async function writeSpd(source: Image, outputPath: string, templatePath?: string): Promise<void> {
+export async function writeSpd(
+  source: Image,
+  outputPath: string,
+  templatePath?: string,
+  targetLayer: 1 | 2 = 2,
+): Promise<void> {
   const canvas = flattenOntoWhite(source);
   const tileColumns = Math.ceil((canvas.width + 2 * HORIZONTAL_TILE_PADDING) / TILE_SIZE);
   const tileRows = Math.ceil(canvas.height / TILE_SIZE);
@@ -100,7 +106,7 @@ export async function writeSpd(source: Image, outputPath: string, templatePath?:
         // Device-generated drawings use GREYA (PNG color type 4) tiles on the
         // background surface. Keeping surface_1 empty makes the document
         // immediately drawable in Atelier.
-        db.run('INSERT INTO surface_2 (tid, tile) VALUES (?, ?)', [tid, encodePng(tile.convertColor(ImageColorModel.GREYA))]);
+        db.run(`INSERT INTO surface_${targetLayer} (tid, tile) VALUES (?, ?)`, [tid, encodePng(tile.convertColor(ImageColorModel.GREYA))]);
       }
     }
     await mkdir(path.dirname(outputPath), { recursive: true });
